@@ -1,4 +1,4 @@
-resource "google_compute_network" "vpc_list" {
+resource "google_compute_network" "vpc_list" 
   count                           = length(var.vpc_list)
   name                            = var.vpc_list[count.index]
   auto_create_subnetworks         = false
