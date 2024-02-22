@@ -16,6 +16,8 @@ jobs:
               uses: hashicorp/setup-terraform@v3
               with:
                   terraform_version: 1.0.0
+            - name: change directory
+              run: cd infra
             - name: Terraform Initialize
               run: terraform init
             - name: Terraform Validate
