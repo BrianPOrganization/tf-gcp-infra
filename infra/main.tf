@@ -39,7 +39,7 @@ resource "google_compute_firewall" "vpc_firewall" {
   source_ranges = ["0.0.0.0/0"]
 }
 
-resource "google_compute_firewall" "no_ssh" {
+resource "google_compute_firewall" "no_ssh"
   name    = "no-ssh-${count.index}"
   count   = length(var.vpc_list)
   network = google_compute_network.vpc_list[count.index].name
