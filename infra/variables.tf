@@ -63,3 +63,39 @@ variable "image_type" {
   type        = string
   default     = "pd-balanced"
 }
+
+variable "database_version" {
+  description = "Database version"
+  type        = string
+  default     = "MYSQL_8_0_36"
+}
+
+variable "database_tier" {
+  description = "Database tier"
+  type        = string
+  default     = "db-f1-micro"
+}
+
+variable "database_disk_size" {
+  description = "Database disk size"
+  type        = number
+  default     = 100
+}
+
+variable "database_disk_type" {
+  description = "Database disk type"
+  type        = string
+  default     = "PD_SSD"
+}
+
+variable "database_availability_type" {
+  description = "Database availability type"
+  type        = string
+  default     = "REGIONAL"
+}
+
+variable "database_deletion_protection" {
+  description = "Database deletion protection"
+  type        = bool
+  default     = false
+}
