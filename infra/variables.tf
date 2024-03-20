@@ -99,3 +99,21 @@ variable "database_deletion_protection" {
   type        = bool
   default     = false
 }
+
+variable "domain_name" {
+    description = "Domain name"
+    type        = string
+    default     = "brianmarcelpatrao.me."
+}
+
+variable "zone_name" {
+  description = "Zone name"
+  type        = string
+  default     = "brian-zone"
+}
+
+variable "ttl" {
+  description = "TTL"
+  type        = number
+  default     = 30
+}

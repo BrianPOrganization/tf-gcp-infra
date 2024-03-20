@@ -6,6 +6,33 @@ resource "google_compute_network" "vpc_list" {
   routing_mode                    = var.routing_mode
 }
 
+resource "google_dns_record_set" "dns_record" {
+  count = length(var.vpc_list)
+  name = var.domain_name
+  type = "A"
+  ttl  = var.ttl
+  managed_zone = var.zone_name
+  rrdatas = [google_compute_instance.webapp_instance[count.index].network_interface[0].access_config[0].nat_ip]
+}
+
+resource "google_service_account" "service_account" {
+  account_id   = "csye6225-dev"
+  display_name = "csye6225-dev"
+  project = var.project
+}
+
+resource "google_project_iam_binding" "logging_admin" {
+  project = var.project
+  role    = "roles/logging.admin"
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+}
+
+resource "google_project_iam_binding" "monitring_metric_writer" {
+  project = var.project
+  role    = "roles/monitoring.metricWriter"
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+}
+
 resource "google_compute_subnetwork" "webapp_subnet" {
   name          = "webapp-${count.index}"
   ip_cidr_range = var.webapp_cidr_range
@@ -43,7 +70,7 @@ resource "google_compute_firewall" "no_ssh" {
   name    = "no-ssh-${count.index}"
   count   = length(var.vpc_list)
   network = google_compute_network.vpc_list[count.index].name
-  deny {
+  allow {
     protocol = "tcp"
     ports    = ["22"]
   }
@@ -79,6 +106,10 @@ resource "google_compute_instance" "webapp_instance" {
     subnetwork = google_compute_subnetwork.webapp_subnet[count.index].name
     access_config {}
   }
+  service_account {
+    email  = google_service_account.service_account.email
+    scopes = ["logging-write", "monitoring"]
+  }
   metadata_startup_script = <<EOF
 #!/usr/bin/bash
 if [ ! -f "/opt/application/application.properties" ]; then
@@ -87,9 +118,11 @@ if [ ! -f "/opt/application/application.properties" ]; then
   echo "spring.datasource.username=${google_sql_user.mysql_user[count.index].name}"
   echo "spring.datasource.password=${random_password.password.result}"
   echo "spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver"
+  echo "spring.main.banner-mode=off"
   echo "spring.jpa.hibernate.ddl-auto=update"
   echo "spring.jpa.database=mysql"
   echo "spring.jpa.show-sql=true"
+  echo "server.servlet.context-path=/"
 } >> /opt/application/application.properties
 fi
 if [ ! -f "/opt/application/application-test.properties" ]; then
@@ -98,6 +131,7 @@ if [ ! -f "/opt/application/application-test.properties" ]; then
   echo "spring.datasource.username=${google_sql_user.mysql_user[count.index].name}"
   echo "spring.datasource.password=${random_password.password.result}"
   echo "spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver"
+  echo "spring.main.banner-mode=off"
   echo "spring.jpa.hibernate.ddl-auto=create"
   echo "spring.jpa.database=mysql"
   echo "spring.jpa.show-sql=true"
