@@ -7,18 +7,18 @@ resource "google_compute_network" "vpc_list" {
 }
 
 resource "google_dns_record_set" "dns_record" {
-  count = length(var.vpc_list)
-  name = var.domain_name
-  type = "A"
-  ttl  = var.ttl
+  count        = length(var.vpc_list)
+  name         = var.domain_name
+  type         = "A"
+  ttl          = var.ttl
   managed_zone = var.zone_name
-  rrdatas = [google_compute_instance.webapp_instance[count.index].network_interface[0].access_config[0].nat_ip]
+  rrdatas      = [google_compute_instance.webapp_instance[count.index].network_interface[0].access_config[0].nat_ip]
 }
 
 resource "google_service_account" "service_account" {
   account_id   = "csye6225-dev"
   display_name = "csye6225-dev"
-  project = var.project
+  project      = var.project
 }
 
 resource "google_project_iam_binding" "logging_admin" {
@@ -30,6 +30,24 @@ resource "google_project_iam_binding" "logging_admin" {
 resource "google_project_iam_binding" "monitring_metric_writer" {
   project = var.project
   role    = "roles/monitoring.metricWriter"
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+}
+
+resource "google_project_iam_binding" "pubsub_publisher" {
+  project = var.project
+  role    = "roles/pubsub.publisher"
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+}
+
+resource "google_project_iam_binding" "event_receiver" {
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+  project = var.project
+  role    = "roles/eventarc.eventReceiver"
+}
+
+resource "google_project_iam_binding" "cloudfunctions_invoker" {
+  project = var.project
+  role    = "roles/cloudfunctions.invoker"
   members = ["serviceAccount:${google_service_account.service_account.email}"]
 }
 
@@ -70,7 +88,7 @@ resource "google_compute_firewall" "no_ssh" {
   name    = "no-ssh-${count.index}"
   count   = length(var.vpc_list)
   network = google_compute_network.vpc_list[count.index].name
-  deny {
+  allow {
     protocol = "tcp"
     ports    = ["22"]
   }
@@ -82,10 +100,10 @@ resource "google_compute_firewall" "allow-sql-webapp-conn" {
   count   = length(var.vpc_list)
   network = google_compute_network.vpc_list[count.index].name
   allow {
-      protocol = "tcp"
-      ports    = ["3306"]
+    protocol = "tcp"
+    ports    = ["3306"]
   }
-  source_ranges = [google_compute_instance.webapp_instance[count.index].network_interface[0].network_ip]
+  source_ranges      = [google_compute_instance.webapp_instance[count.index].network_interface[0].network_ip]
   destination_ranges = ["${google_compute_global_address.private_ip_range[count.index].address}/${google_compute_global_address.private_ip_range[count.index].prefix_length}"]
 }
 
@@ -108,7 +126,7 @@ resource "google_compute_instance" "webapp_instance" {
   }
   service_account {
     email  = google_service_account.service_account.email
-    scopes = ["logging-write", "monitoring"]
+    scopes = ["logging-write", "monitoring", "pubsub"]
   }
   metadata_startup_script = <<EOF
 #!/usr/bin/bash
@@ -121,8 +139,13 @@ if [ ! -f "/opt/application/application.properties" ]; then
   echo "spring.main.banner-mode=off"
   echo "spring.jpa.hibernate.ddl-auto=update"
   echo "spring.jpa.database=mysql"
-  echo "spring.jpa.show-sql=true"
+  echo "spring.jpa.show-sql=false"
   echo "server.servlet.context-path=/"
+  echo "server.port=8080"
+  echo "gcp.project_id=${var.project}"
+  echo "gcp.topic_name=${google_pubsub_topic.topic.name}"
+  echo "gcp.email_time_duration=2"
+  echo "app.environment=prod"
 } >> /opt/application/application.properties
 fi
 if [ ! -f "/opt/application/application-test.properties" ]; then
@@ -138,6 +161,7 @@ if [ ! -f "/opt/application/application-test.properties" ]; then
   echo "logging.level.org.springframework.boot.test.context.SpringBootTestContextBootstrapper=WARN"
   echo "logging.level.org.springframework.context.support.AbstractContextLoader=WARN"
   echo "logging.level.org.springframework.context.support.AnnotationConfigContextLoaderUtils=WARN"
+  echo "app.environment=test"
 } >> /opt/application/application-test.properties
 fi
 sudo chown csye6225:csye6225 /opt/application/application.properties
@@ -208,4 +232,57 @@ resource "google_sql_user" "mysql_user" {
   instance = google_sql_database_instance.cloudsql_instance[count.index].name
   password = random_password.password.result
 }
+
+resource "google_pubsub_topic" "topic" {
+  name = "verify_email"
+}
+
+resource "google_pubsub_subscription" "subscription" {
+  name  = "topic_subscription"
+  topic = google_pubsub_topic.topic.name
+}
+
+resource "google_cloudfunctions2_function" "email_subscription" {
+  count    = length(var.vpc_list)
+  location = var.region
+  name     = var.cloud_function_name
+  build_config {
+    entry_point = var.cloud_function_entrypoint
+    runtime     = var.cloud_function_runtime
+    source {
+      storage_source {
+        bucket = var.cloud_storage_bucket
+        object = var.cloud_storage_bucket_object
+      }
+    }
+  }
+  event_trigger {
+    trigger_region = var.region
+    event_type     = var.cloud_function_event_trigger
+    pubsub_topic   = google_pubsub_topic.topic.id
+    retry_policy   = var.cloud_function_retry_policy
+  }
+  service_config {
+    max_instance_count = 1
+    available_memory   = var.cloud_function_available_memory
+    timeout_seconds    = var.cloud_function_timeout
+    vpc_connector      = google_vpc_access_connector.connector[count.index].id
+    environment_variables = {
+      DB_USER = google_sql_user.mysql_user[count.index].name
+      DB_PASS = random_password.password.result
+      DB_NAME = google_sql_database.mysql_database[count.index].name
+      DB_PORT = var.db_port
+      DB_HOST = google_sql_database_instance.cloudsql_instance[count.index].private_ip_address
+    }
+    service_account_email = google_service_account.service_account.email
+  }
+}
+
+resource "google_vpc_access_connector" "connector" {
+  count         = length(var.vpc_list)
+  name          = var.vpc_connector_name
+  ip_cidr_range = var.vpc_connector_cidr
+  network       = google_compute_network.vpc_list[count.index].name
+}
+
 
