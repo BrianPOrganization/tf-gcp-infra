@@ -28,6 +28,18 @@ variable "zone" {
   default     = "us-east1-c"
 }
 
+variable "zone1" {
+  description = "GCP zone"
+  type        = string
+  default     = "us-east1-b"
+}
+
+variable "zone2" {
+  description = "GCP zone"
+  type        = string
+  default     = "us-east1-d"
+}
+
 variable "project" {
   description = "GCP project"
   type        = string
@@ -188,4 +200,62 @@ variable "vpc_connector_name" {
   description = "VPC connector name"
   type        = string
   default     = "vpc-connector"
+}
+
+variable "service_port" {
+  description = "Service port"
+  type        = number
+  default     = 8080
+}
+
+variable "health_check_request_path" {
+  description = "Health check request path"
+  type        = string
+  default     = "/healthz"
+}
+
+variable "health_check" {
+  description = "Health check configuration"
+  type = object({
+    check_interval_sec  = number
+    timeout_sec         = number
+  })
+  default = {
+    check_interval_sec  = 15
+    timeout_sec         = 10
+  }
+}
+
+variable "autoscaler" {
+  description = "Autoscaler configuration"
+  type = object({
+    min_replicas           = number
+    max_replicas           = number
+    target_cpu_utilization = number
+    cooldown_period        = number
+  })
+  default = {
+    min_replicas           = 3
+    max_replicas           = 6
+    target_cpu_utilization = 0.05
+    cooldown_period        = 180
+  }
+}
+
+variable "named_port" {
+  description = "Named port"
+  type        = string
+  default     = "http-server"
+}
+
+variable "health_check_port" {
+  description = "Health check port"
+  type        = number
+  default     = 8080
+}
+
+variable "instance_group_manager_autohealing_delay" {
+  description = "Instance group manager autohealing delay"
+  type        = number
+  default     = 180
 }
