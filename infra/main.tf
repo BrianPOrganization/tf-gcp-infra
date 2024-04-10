@@ -51,6 +51,12 @@ resource "google_project_iam_binding" "cloudfunctions_invoker" {
   members = ["serviceAccount:${google_service_account.service_account.email}"]
 }
 
+resource "google_project_iam_binding" "crypto_key_encrypter_decrypter" {
+  project = var.project
+  role    = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  members = ["serviceAccount:${google_service_account.service_account.email}"]
+}
+
 resource "google_compute_subnetwork" "webapp_subnet" {
   name          = "webapp-${count.index}"
   ip_cidr_range = var.webapp_cidr_range
@@ -119,55 +125,6 @@ resource "google_compute_firewall" "lb_firewall" {
   target_tags   = ["webapp-instance"]
 }
 
-#resource "google_compute_instance" "webapp_instance" {
-#  machine_type = var.machine_type
-#  count        = length(var.vpc_list)
-#  name         = "webapp-instance-${count.index}"
-#  zone         = var.zone
-#  boot_disk {
-#    initialize_params {
-#      image = var.image
-#      type  = var.image_type
-#      size  = var.image_size
-#    }
-#  }
-#  network_interface {
-#    network    = google_compute_network.vpc_list[count.index].name
-#    subnetwork = google_compute_subnetwork.webapp_subnet[count.index].name
-#    access_config {}
-#  }
-#  service_account {
-#    email  = google_service_account.service_account.email
-#    scopes = ["logging-write", "monitoring", "pubsub"]
-#  }
-#  metadata_startup_script = <<EOF
-##!/usr/bin/bash
-#if [ ! -f "/opt/application/application.properties" ]; then
-#{
-#  echo "spring.datasource.url=jdbc:mysql://${google_sql_database_instance.cloudsql_instance[count.index].private_ip_address}:3306/${google_sql_database.mysql_database[count.index].name}?createDatabaseIfNotExist=true"
-#  echo "spring.datasource.username=${google_sql_user.mysql_user[count.index].name}"
-#  echo "spring.datasource.password=${random_password.password.result}"
-#  echo "spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver"
-#  echo "spring.main.banner-mode=off"
-#  echo "spring.jpa.hibernate.ddl-auto=update"
-#  echo "spring.jpa.database=mysql"
-#  echo "spring.jpa.show-sql=false"
-#  echo "server.servlet.context-path=/"
-#  echo "server.port=8080"
-#  echo "gcp.project_id=${var.project}"
-#  echo "gcp.topic_name=${google_pubsub_topic.topic.name}"
-#  echo "gcp.email_time_duration=2"
-#  echo "app.environment=prod"
-#} >> /opt/application/application.properties
-#fi
-#sudo chown csye6225:csye6225 /opt/application/application.properties
-#sudo chown csye6225:csye6225 /opt/application/application-test.properties
-#sudo chmod 440 /opt/application/application.properties
-#sudo chmod 440 /opt/application/application-test.properties
-#touch test.txt
-#EOF
-#}
-
 resource "google_compute_instance_template" "webapp_instance_template" {
   machine_type = var.machine_type
   count        = length(var.vpc_list)
@@ -177,8 +134,11 @@ resource "google_compute_instance_template" "webapp_instance_template" {
     source_image = var.image
     auto_delete  = true
     boot         = true
-    type = var.image_type
+    type         = var.image_type
     disk_size_gb = var.image_size
+    disk_encryption_key {
+      kms_key_self_link = google_kms_crypto_key.vm_key.id
+    }
   }
   network_interface {
     network    = google_compute_network.vpc_list[count.index].name
@@ -187,11 +147,12 @@ resource "google_compute_instance_template" "webapp_instance_template" {
   }
   service_account {
     email  = google_service_account.service_account.email
-    scopes = ["logging-write", "monitoring", "pubsub"]
+    scopes = ["cloud-platform"]
   }
   lifecycle {
     create_before_destroy = true
   }
+  depends_on              = [google_kms_crypto_key.vm_key]
   metadata_startup_script = <<EOF
 #!/usr/bin/bash
 if [ ! -f "/opt/application/application.properties" ]; then
@@ -221,9 +182,9 @@ EOF
 }
 
 resource "google_compute_region_health_check" "health_check" {
-  name                = "health-check"
-  check_interval_sec  = var.health_check.check_interval_sec
-  timeout_sec         = var.health_check.timeout_sec
+  name               = "health-check"
+  check_interval_sec = var.health_check.check_interval_sec
+  timeout_sec        = var.health_check.timeout_sec
   http_health_check {
     port         = var.health_check_port
     request_path = var.health_check_request_path
@@ -251,16 +212,16 @@ resource "google_compute_region_autoscaler" "autoscaler" {
 }
 
 resource "google_compute_region_instance_group_manager" "manager" {
-  count              = length(var.vpc_list)
-  name               = "instance-group-manager"
-  base_instance_name = "instance"
-  region             = var.region
-  target_size        = var.autoscaler.min_replicas
-  distribution_policy_zones = [var.zone,var.zone1,var.zone2]
+  count                     = length(var.vpc_list)
+  name                      = var.MIG.name
+  base_instance_name        = var.MIG.base_instance_name
+  region                    = var.region
+  target_size               = var.autoscaler.min_replicas
+  distribution_policy_zones = [var.zone, var.zone1, var.zone2]
 
   version {
     instance_template = google_compute_instance_template.webapp_instance_template[count.index].self_link
-    name              = "version-1"
+    name              = var.MIG.version_name
   }
 
   named_port {
@@ -292,6 +253,29 @@ resource "google_compute_global_address" "private_ip_range" {
   network       = google_compute_network.vpc_list[count.index].self_link
 }
 
+resource "google_storage_bucket" "storage_bucket" {
+  name          = var.bucket_name
+  location      = var.region
+  force_destroy = true
+  encryption {
+    default_kms_key_name = google_kms_crypto_key.storage_bucket_key.id
+  }
+  depends_on = [google_kms_crypto_key.storage_bucket_key, google_kms_crypto_key_iam_binding.storage_bucket_key_binding]
+}
+
+resource "google_storage_bucket_object" "bucket_object" {
+  bucket     = google_storage_bucket.storage_bucket.name
+  name       = var.bucket_object
+  source     = var.bucket_object
+  depends_on = [google_storage_bucket.storage_bucket]
+}
+
+resource "google_storage_bucket_iam_member" "storage_bucket_iam_member" {
+  bucket = google_storage_bucket.storage_bucket.name
+  member = "serviceAccount:${data.google_storage_project_service_account.google_cloud_storage_account.email_address}"
+  role   = "roles/storage.objectAdmin"
+}
+
 resource "google_sql_database_instance" "cloudsql_instance" {
   count               = length(var.vpc_list)
   name                = "mysql-instance-${count.index}"
@@ -313,7 +297,8 @@ resource "google_sql_database_instance" "cloudsql_instance" {
       enabled            = true
     }
   }
-  depends_on = [google_service_networking_connection.private_vpc_connection]
+  depends_on          = [google_service_networking_connection.private_vpc_connection, google_kms_crypto_key.cloud_sql_key]
+  encryption_key_name = google_kms_crypto_key.cloud_sql_key.id
 }
 
 resource "google_sql_database" "mysql_database" {
@@ -353,8 +338,8 @@ resource "google_cloudfunctions2_function" "email_subscription" {
     runtime     = var.cloud_function_runtime
     source {
       storage_source {
-        bucket = var.cloud_storage_bucket
-        object = var.cloud_storage_bucket_object
+        bucket = google_storage_bucket.storage_bucket.name
+        object = google_storage_bucket_object.bucket_object.name
       }
     }
   }
@@ -380,66 +365,27 @@ resource "google_cloudfunctions2_function" "email_subscription" {
   }
 }
 
+resource "google_project_service_identity" "gcp_sa_cloud_sql" {
+  provider = google-beta
+  service  = "sqladmin.googleapis.com"
+}
+
+resource "google_kms_crypto_key_iam_binding" "crypto_key" {
+  provider      = google-beta
+  crypto_key_id = google_kms_crypto_key.cloud_sql_key.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+
+  members = [
+    "serviceAccount:${google_project_service_identity.gcp_sa_cloud_sql.email}",
+  ]
+}
+
 resource "google_vpc_access_connector" "connector" {
   count         = length(var.vpc_list)
   name          = var.vpc_connector_name
   ip_cidr_range = var.vpc_connector_cidr
   network       = google_compute_network.vpc_list[count.index].name
 }
-
-#resource "google_compute_region_backend_service" "backend_service" {
-#  load_balancing_scheme = "INTERNAL_MANAGED"
-#  count = length(var.vpc_list)
-#  region = var.region
-#  name        = "backend-service"
-#  port_name = "http-server"
-#  protocol    = "HTTP"
-#  timeout_sec = 10
-#
-#  health_checks = [google_compute_region_health_check.health_check.self_link]
-#
-#  backend {
-#    group = google_compute_region_instance_group_manager.manager[count.index].instance_group
-#    balancing_mode = "UTILIZATION"
-#    capacity_scaler = 1.0
-#  }
-#}
-#
-#resource "google_compute_region_url_map" "url_map" {
-#  count = length(var.vpc_list)
-#  name            = "url-map"
-#  region = var.region
-#  default_service = google_compute_region_backend_service.backend_service[count.index].self_link
-#}
-#
-#resource "google_compute_managed_ssl_certificate" "managed_ssl_certificate" {
-#  name = "managed-ssl-certificate"
-#  managed {
-#    domains = [var.domain_name]
-#  }
-#}
-#
-#resource "google_compute_region_target_https_proxy" "https_proxy" {
-#  count = length(var.vpc_list)
-#  region = var.region
-#  name             = "https-proxy"
-#  url_map          = google_compute_region_url_map.url_map[count.index].id
-#  ssl_certificates = [google_compute_managed_ssl_certificate.managed_ssl_certificate.name]
-#  depends_on = [google_compute_region_url_map.url_map]
-#}
-#
-#resource "google_compute_global_address" "global_ip_address" {
-#  name = "global-ip-address"
-#}
-#
-#resource "google_compute_forwarding_rule" "https_forwarding_rule" {
-#  count      = length(var.vpc_list)
-#  region     = var.region
-#  name       = "http-forwarding-rule"
-#  target     = google_compute_region_target_https_proxy.https_proxy[count.index].self_link
-#  port_range = "443"
-#  ip_address = google_compute_global_address.global_ip_address.address
-#}
 
 module "gce-lb-http" {
   count                           = length(var.vpc_list)
@@ -476,3 +422,97 @@ module "gce-lb-http" {
     }
   }
 }
+
+resource "google_kms_key_ring" "key_ring" {
+  name     = "key-ring-x-11"
+  location = var.region
+}
+
+resource "google_kms_crypto_key" "vm_key" {
+  name            = "vm-key-x-4"
+  key_ring        = google_kms_key_ring.key_ring.id
+  rotation_period = "2592000s"
+  lifecycle {
+    prevent_destroy = false
+  }
+  destroy_scheduled_duration = "86400s"
+}
+
+resource "google_kms_crypto_key_iam_binding" "vm_key_binding" {
+  crypto_key_id = google_kms_crypto_key.vm_key.id
+  members       = ["serviceAccount:${google_service_account.service_account.email}"]
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+}
+
+resource "google_kms_crypto_key" "cloud_sql_key" {
+  name            = "cloud-sql-key-x-4"
+  key_ring        = google_kms_key_ring.key_ring.id
+  rotation_period = "2592000s"
+  lifecycle {
+    prevent_destroy = false
+  }
+  destroy_scheduled_duration = "86400s"
+}
+
+resource "google_kms_crypto_key" "storage_bucket_key" {
+  name            = "storage-bucket-key-x-4"
+  key_ring        = google_kms_key_ring.key_ring.id
+  rotation_period = "2592000s"
+  lifecycle {
+    prevent_destroy = false
+  }
+  destroy_scheduled_duration = "86400s"
+}
+
+data "google_storage_project_service_account" "google_cloud_storage_account" {}
+
+resource "google_kms_crypto_key_iam_binding" "storage_bucket_key_binding" {
+  crypto_key_id = google_kms_crypto_key.storage_bucket_key.id
+  members       = ["serviceAccount:${data.google_storage_project_service_account.google_cloud_storage_account.email_address}"]
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+}
+
+data "google_project" "project" {}
+
+resource "google_project_iam_member" "grant_kms_role" {
+  project = data.google_project.project.project_id
+  role    = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member  = "serviceAccount:service-${data.google_project.project.number}@compute-system.iam.gserviceaccount.com"
+}
+
+resource "google_secret_manager_secret" "metadata" {
+  secret_id = "metadata"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "metadata_version" {
+  secret      = google_secret_manager_secret.metadata.id
+  secret_data = google_compute_instance_template.webapp_instance_template[0].metadata_startup_script
+}
+
+resource "google_secret_manager_secret" "key_ring" {
+  secret_id = "key_ring"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "key_ring_version" {
+  secret      = google_secret_manager_secret.key_ring.id
+  secret_data = google_kms_key_ring.key_ring.name
+}
+
+resource "google_secret_manager_secret" "vm_key" {
+  secret_id = "vm_key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "vm_key_version" {
+  secret      = google_secret_manager_secret.vm_key.id
+  secret_data = google_kms_crypto_key.vm_key.name
+}
+
