@@ -221,7 +221,7 @@ resource "google_compute_region_instance_group_manager" "manager" {
 
   version {
     instance_template = google_compute_instance_template.webapp_instance_template[count.index].self_link
-    name              = var.MIG.version_name
+    name              = var.MIG.version
   }
 
   named_port {
