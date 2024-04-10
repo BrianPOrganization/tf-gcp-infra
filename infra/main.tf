@@ -308,9 +308,11 @@ resource "google_sql_database" "mysql_database" {
 }
 
 resource "random_password" "password" {
-  length           = 16
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
+  length  = 16
+  special = false
+  lower   = true
+  upper   = true
+
 }
 
 resource "google_sql_user" "mysql_user" {
