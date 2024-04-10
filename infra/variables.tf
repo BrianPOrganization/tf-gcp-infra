@@ -217,12 +217,12 @@ variable "health_check_request_path" {
 variable "health_check" {
   description = "Health check configuration"
   type = object({
-    check_interval_sec  = number
-    timeout_sec         = number
+    check_interval_sec = number
+    timeout_sec        = number
   })
   default = {
-    check_interval_sec  = 15
-    timeout_sec         = 10
+    check_interval_sec = 15
+    timeout_sec        = 10
   }
 }
 
@@ -258,4 +258,30 @@ variable "instance_group_manager_autohealing_delay" {
   description = "Instance group manager autohealing delay"
   type        = number
   default     = 180
+}
+
+variable "MIG" {
+  description = "Managed instance group configuration"
+  type = object({
+    name               = string
+    base_instance_name = string
+    version            = string
+  })
+  default = {
+    name               = "instance-group-manager"
+    base_instance_name = "instance"
+    version            = "version-1"
+  }
+}
+
+variable "bucket_name" {
+  description = "Bucket name"
+  type        = string
+  default     = "csy6225-brian"
+}
+
+variable "bucket_object" {
+  description = "Bucket object"
+  type        = string
+  default     = "serverlesszip.zip"
 }
